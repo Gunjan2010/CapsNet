@@ -7,7 +7,7 @@ from tensorflow.keras.applications import ResNet50V2
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D, Lambda, Reshape
 
-# ----------------- Squash Function for Capsules -----------------
+
 epsilon = 1e-7
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis=axis, keepdims=True)
@@ -55,13 +55,13 @@ def PrimaryCaps(inputs, dim_capsule, n_channels, kernel_size, strides, padding):
     x = Reshape(target_shape=[-1, dim_capsule + 2])(x)
 
 
-# ----------------- Paths and Constants -----------------
+
 train_dir = '/kaggle/input/nail-disease-detection-dataset/data/train'
 val_dir = '/kaggle/input/nail-disease-detection-dataset/data/validation'
 IMG_SIZE = (224, 224)
 BATCH_SIZE = 32
 
-# ----------------- Data Generators -----------------
+
 train_datagen = ImageDataGenerator(
     rescale=1.0/255,
     rotation_range=40,
@@ -78,11 +78,11 @@ train_datagen = ImageDataGenerator(
 
 val_datagen = ImageDataGenerator(rescale=1.0/255)
 
-# ----------------- Label Info -----------------
+
 labels = sorted(os.listdir(train_dir))
 num_classes = len(labels)
 
-# ----------------- Capsule-Integrated Model -----------------
+
 def create_caps_model():
     base_model = ResNet50V2(weights='imagenet', include_top=False, input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
     base_model.trainable = False
@@ -127,7 +127,7 @@ def create_scratch_caps_model():
                   metrics=['accuracy'])
     return model
 
-# ----------------- Generators -----------------
+
 train_generator = train_datagen.flow_from_directory(
     directory=train_dir,
     target_size=IMG_SIZE,
@@ -144,7 +144,7 @@ val_generator = val_datagen.flow_from_directory(
     shuffle=False
 )
 
-# ----------------- Train -----------------
+
 model = create_caps_model()
 history = model.fit(
     train_generator,
@@ -152,6 +152,6 @@ history = model.fit(
     validation_data=val_generator
 )
 
-# ----------------- Evaluate -----------------
+
 val_loss, val_accuracy = model.evaluate(val_generator)
 print(f"Validation loss: {val_loss:.4f}, Validation accuracy: {val_accuracy:.4f}")
