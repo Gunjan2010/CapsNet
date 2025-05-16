@@ -5,9 +5,10 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras import layers, models, Input, Model
 from tensorflow.keras.applications import ResNet50V2
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D, Lambda, Reshape
+from tensorflow.keras.layers import Dense, Dropout, GlobalAveragePooling2D, Lambda, Reshape, Conv2D, BatchNormalization, MaxPooling2D
 
 
+# Capsule-related functions
 epsilon = 1e-7
 def squash(vectors, axis=-1):
     s_squared_norm = tf.reduce_sum(tf.square(vectors), axis=axis, keepdims=True)
@@ -42,7 +43,7 @@ class CapsuleLayer(tf.keras.layers.Layer):
         for i in range(self.routings):
             c = tf.nn.softmax(b, axis=2)
             c = tf.expand_dims(c, -1)
-            s = tf.reduce_sum(c * u_hat, axis=5)
+            s = tf.reduce_sum(c * u_hat, axis=1)
             v = squash(s)
             if i < self.routings - 1:
                 v_expand = tf.expand_dims(v, 1)
@@ -50,18 +51,20 @@ class CapsuleLayer(tf.keras.layers.Layer):
         return v
 
 def PrimaryCaps(inputs, dim_capsule, n_channels, kernel_size, strides, padding):
-    x = layers.Conv2D(filters=dim_capsule * n_channels, kernel_size=kernel_size,
-                      strides=strides, padding=padding, activation='relu')(inputs)
-    x = Reshape(target_shape=[-1, dim_capsule + 2])(x)
+    x = Conv2D(filters=dim_capsule * n_channels, kernel_size=kernel_size,
+               strides=strides, padding=padding, activation='relu')(inputs)
+    x = Reshape(target_shape=[-1, dim_capsule])(x)
+    return x
 
 
-
+# Dataset paths
 train_dir = '/kaggle/input/nail-disease-detection-dataset/data/train'
 val_dir = '/kaggle/input/nail-disease-detection-dataset/data/validation'
 IMG_SIZE = (224, 224)
 BATCH_SIZE = 32
 
 
+# Data generators
 train_datagen = ImageDataGenerator(
     rescale=1.0/255,
     rotation_range=40,
@@ -78,45 +81,49 @@ train_datagen = ImageDataGenerator(
 
 val_datagen = ImageDataGenerator(rescale=1.0/255)
 
-
 labels = sorted(os.listdir(train_dir))
 num_classes = len(labels)
 
-
-def create_caps_model():
-    base_model = ResNet50V2(weights='imagenet', include_top=False, input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
-    base_model.trainable = False
-
+# Model from scratch with CNN 
+def create_cnn_model():
     inputs = Input(shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
-    x = base_model(inputs, training=False)
-    x = layers.Conv2D(256, 3, padding='same', activation='relu')(x)
-    x = layers.BatchNormalization()(x)
-    x = PrimaryCaps(x, dim_capsule=8, n_channels=32, kernel_size=9, strides=2, padding='same')
-    x = CapsuleLayer(num_capsule=num_classes, dim_capsule=16)(x)
-    outputs = Lambda(lambda z: tf.sqrt(tf.reduce_sum(tf.square(z), axis=2)))(x)
+    
+    x = Conv2D(128, 3, activation='relu', padding='same')(inputs)
+    x = BatchNormalization()(x)
+    x = Conv2D(64, 3, activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+
+    x = Conv2D(32, 3, activation='relu', padding='same')(x)
+    x = BatchNormalization()(x)
+    x = Conv2D(16, 3, activation='relu', padding='same')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+
+    x = Flatten()(x)
+    x = Dense(256, activation='relu')(x)
+    x = Dropout(0.5)(x)
+    outputs = Dense(num_classes, activation='softmax')(x)
 
     model = Model(inputs, outputs)
     model.compile(optimizer=Adam(learning_rate=0.0003),
                   loss='categorical_crossentropy',
                   metrics=['accuracy'])
     return model
+    
 
-def create_scratch_caps_model():
+# Model from scratch with CNN + Capsule Network
+def create_cnn_caps_model():
     inputs = Input(shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
-    x = Conv2D(64, 3, activation='relu', padding='same')(inputs)
+    x = Conv2D(128, 3, activation='relu', padding='same')(inputs)
     x = BatchNormalization()(x)
     x = Conv2D(64, 3, activation='relu', padding='same')(x)
     x = MaxPooling2D(pool_size=(2, 2))(x)
 
-    x = Conv2D(128, 3, activation='relu', padding='same')(x)
+    x = Conv2D(32, 3, activation='relu', padding='same')(x)
     x = BatchNormalization()(x)
-    x = Conv2D(128, 3, activation='relu', padding='same')(x)
+    x = Conv2D(16, 3, activation='relu', padding='same')(x)
     x = MaxPooling2D(pool_size=(2, 2))(x)
 
-    x = Conv2D(256, 3, activation='relu', padding='same')(x)
-    x = BatchNormalization()(x)
 
-    # PrimaryCaps + Capsule Layer
     primary_caps = PrimaryCaps(x, dim_capsule=8, n_channels=32, kernel_size=9, strides=2, padding='same')
     digit_caps = CapsuleLayer(num_capsule=num_classes, dim_capsule=16)(primary_caps)
     output = Lambda(lambda z: tf.sqrt(tf.reduce_sum(tf.square(z), axis=2)))(digit_caps)
@@ -128,6 +135,27 @@ def create_scratch_caps_model():
     return model
 
 
+
+
+def create_caps_model():
+    base_model = ResNet50V2(weights='imagenet', include_top=False, input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
+    base_model.trainable = False
+
+    inputs = Input(shape=(IMG_SIZE[0], IMG_SIZE[1], 3))
+    x = base_model(inputs, training=False)
+    x = Conv2D(256, 3, padding='same', activation='relu')(x)
+    x = BatchNormalization()(x)
+    x = PrimaryCaps(x, dim_capsule=8, n_channels=32, kernel_size=9, strides=2, padding='same')
+    x = CapsuleLayer(num_capsule=num_classes, dim_capsule=16)(x)
+    outputs = Lambda(lambda z: tf.sqrt(tf.reduce_sum(tf.square(z), axis=2)))(x)
+
+    model = Model(inputs, outputs)
+    model.compile(optimizer=Adam(learning_rate=0.0003),
+                  loss='categorical_crossentropy',
+                  metrics=['accuracy'])
+    return model
+
+# Data loading
 train_generator = train_datagen.flow_from_directory(
     directory=train_dir,
     target_size=IMG_SIZE,
@@ -145,6 +173,7 @@ val_generator = val_datagen.flow_from_directory(
 )
 
 
+# Train the model
 model = create_caps_model()
 history = model.fit(
     train_generator,
@@ -152,6 +181,6 @@ history = model.fit(
     validation_data=val_generator
 )
 
-
+# Evaluate
 val_loss, val_accuracy = model.evaluate(val_generator)
 print(f"Validation loss: {val_loss:.4f}, Validation accuracy: {val_accuracy:.4f}")
